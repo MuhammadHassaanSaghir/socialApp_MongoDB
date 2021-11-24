@@ -73,10 +73,11 @@ class RequestController extends Controller
                         }
                     }
                     if ($alreadySent != 'Exists') {
+                        $random = substr(number_format(time() * rand(), 0, '', ''), 0, 6);
                         $sendRequest = $userCollection->updateOne(
                             ['_id' => new \MongoDB\BSON\ObjectId($decode->data)],
                             ['$push' => ['FriendRequests' => [
-                                '_id' => substr(number_format(time() * rand(), 0, '', ''), 0, 6),
+                                '_id' => $random,
                                 'sender_id' => $decode->data,
                                 'reciever_id' => $request->reciever_id,
                                 'status' => 'Sended'
@@ -85,7 +86,7 @@ class RequestController extends Controller
                         $sendRequest = $userCollection->updateOne(
                             ['_id' => new \MongoDB\BSON\ObjectId($request->reciever_id)],
                             ['$push' => ['FriendRequests' => [
-                                '_id' => substr(number_format(time() * rand(), 0, '', ''), 0, 6),
+                                '_id' => $random,
                                 'sender_id' => $decode->data,
                                 'reciever_id' => $request->reciever_id,
                                 'status' => 'Pending'
@@ -106,10 +107,11 @@ class RequestController extends Controller
                         ]);
                     }
                 } else {
+                    $random = substr(number_format(time() * rand(), 0, '', ''), 0, 6);
                     $sendRequest = $userCollection->updateOne(
                         ['_id' => new \MongoDB\BSON\ObjectId($decode->data)],
                         ['$push' => ['FriendRequests' => [
-                            '_id' => substr(number_format(time() * rand(), 0, '', ''), 0, 6),
+                            '_id' => $random,
                             'sender_id' => $decode->data,
                             'reciever_id' => $request->reciever_id,
                             'status' => 'Sended'
@@ -118,7 +120,7 @@ class RequestController extends Controller
                     $sendRequest = $userCollection->updateOne(
                         ['_id' => new \MongoDB\BSON\ObjectId($request->reciever_id)],
                         ['$push' => ['FriendRequests' => [
-                            '_id' => substr(number_format(time() * rand(), 0, '', ''), 0, 6),
+                            '_id' => $random,
                             'sender_id' => $decode->data,
                             'reciever_id' => $request->reciever_id,
                             'status' => 'Pending'
@@ -188,17 +190,25 @@ class RequestController extends Controller
             $userCollection = (new Mongo())->social_app->users;
             $friendsRequests =  $userCollection->findOne(
                 [
-                    'FriendRequests.$._id' => $id,
+                    '_id' => new \MongoDB\BSON\ObjectId($decode->data),
+                    'FriendRequests._id' => $id,
                 ]
             );
-            dd($friendsRequests);
             foreach ($friendsRequests['FriendRequests'] as $key => $value) {
-                // dd($value['_id']);
                 if ($value['_id'] == $id) {
-                    // $friends = 'Sended';
-                    $acceptRequest = $friendsRequests->updateOne(
-                        ['FriendRequests._id' => $id],
-                        ['$set' => ['status' => 'Accept']]
+                    $acceptRequest = $userCollection->updateOne(
+                        [
+                            '_id' => new \MongoDB\BSON\ObjectId($decode->data),
+                            'FriendRequests._id' => $id,
+                        ],
+                        ['$set' => ['FriendRequests.$.status' => 'Accept']]
+                    );
+                    $acceptRequest = $userCollection->updateOne(
+                        [
+                            '_id' => new \MongoDB\BSON\ObjectId($value['sender_id']),
+                            'FriendRequests._id' => $id,
+                        ],
+                        ['$set' => ['FriendRequests.$.status' => 'Accept']]
                     );
                     if (!empty($acceptRequest)) {
                         return response([
@@ -215,55 +225,6 @@ class RequestController extends Controller
                     ]);
                 }
             }
-            // dd($friends);
-
-
-
-
-
-
-            // $request->validate([
-            //     'sender_id' => 'required'
-            // ]);
-
-            // if ($decode->data == $request->sender_id) {
-            //     return response([
-            //         "message" => "You cannot receive a Request of yourself"
-            //     ]);
-            // }
-
-            $requestCollection = (new Mongo())->social_app->requests;
-            $recieveRequest =  $requestCollection->findOne(
-                [
-                    'sender_id' => $request->sender_id,
-                    'reciever_id' => $decode->data,
-                ]
-            );
-            if (!empty($recieveRequest)) {
-                if ($recieveRequest->status == 'Accept') {
-                    return response([
-                        "Message" => "You are already Accept the Request"
-                    ]);
-                } else {
-                    $acceptRequest = $requestCollection->updateOne(
-                        ['reciever_id' => $decode->data],
-                        ['$set' => ['status' => 'Accept']]
-                    );
-                    if (!empty($acceptRequest)) {
-                        return response([
-                            "message" => "The request has been Accepted Successfully"
-                        ]);
-                    } else {
-                        return response([
-                            "message" => "Something Went Wrong"
-                        ]);
-                    }
-                }
-            } else {
-                return response([
-                    "message" => "No User Found"
-                ]);
-            }
         } catch (Throwable $e) {
             return response(['message' => $e->getMessage()]);
         }
@@ -274,23 +235,78 @@ class RequestController extends Controller
         try {
             $currToken = $request->bearerToken();
             $decode = JWT::decode($currToken, new Key('socialApp_key', 'HS256'));
-
             if ($id == $decode->data) {
                 return response([
                     "message" => "You cannot Unfriend to Yourself"
                 ]);
             }
+            $userCollection = (new Mongo())->social_app->users;
 
-            $friendExist = DB::select('select * from friend_requests where ((sender_id = ? AND reciever_id = ?) OR (sender_id = ? AND reciever_id = ?))', [$id, $decode->data, $decode->data, $id]);
+            $friendExist = $userCollection->findOne([
+                '$or' =>
+                [
+                    [
+                        '$and' =>
+                        [
+                            ['FriendRequests.sender_id' => $id], ['FriendRequests.reciever_id' => $decode->data]
+                        ]
+                    ],
+                    [
+                        '$and' =>
+                        [
+                            ['FriendRequests.sender_id' => $decode->data], ['FriendRequests.reciever_id' => $id]
+                        ]
+                    ],
+                ]
+            ]);
             if (!empty($friendExist)) {
-                $removeFriend = DB::table('friend_requests')->where('id', $friendExist[0]->id)->delete();
-                if (isset($removeFriend)) {
+                $removeFriend = $userCollection->updateOne([
+                    '$or' =>
+                    [
+                        [
+                            '$and' =>
+                            [
+                                ['FriendRequests.sender_id' => $id], ['FriendRequests.reciever_id' => $decode->data]
+                            ]
+                        ],
+                        [
+                            '$and' =>
+                            [
+                                ['FriendRequests.sender_id' => $decode->data], ['FriendRequests.reciever_id' => $id]
+                            ]
+                        ],
+                    ]
+                ], ['$pull' => ['FriendRequests' => [
+                    'sender_id' => $decode->data,
+                    'reciever_id' => $id,
+                ]]]);
+                $removeFriend = $userCollection->updateOne([
+                    '$or' =>
+                    [
+                        [
+                            '$and' =>
+                            [
+                                ['FriendRequests.sender_id' => $decode->data], ['FriendRequests.reciever_id' => $id]
+                            ]
+                        ],
+                        [
+                            '$and' =>
+                            [
+                                ['FriendRequests.sender_id' => $id], ['FriendRequests.reciever_id' => $decode->data]
+                            ]
+                        ],
+                    ]
+                ], ['$pull' => ['FriendRequests' => [
+                    'sender_id' => $decode->data,
+                    'reciever_id' => $id,
+                ]]]);
+                if (!empty($removeFriend)) {
                     return response([
                         "message" => "You Successfully Remove Friend"
                     ]);
                 } else {
                     return response([
-                        "message" => "Something Went Wrong"
+                        "message" => "No Friend Found"
                     ]);
                 }
             } else {

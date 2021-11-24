@@ -186,37 +186,61 @@ class PostController extends Controller
         try {
             $currToken = $request->bearerToken();
             $decode = JWT::decode($currToken, new Key('socialApp_key', 'HS256'));
-            $collection = (new Mongo())->social_app->posts;
+            $PostCollection = (new Mongo())->social_app->posts;
+            $userCollection = (new Mongo())->social_app->users;
 
-            $post = $collection->find([
+            $posts = $PostCollection->find([
                 'privacy' => ['$in' => ['Private', 'private']]
-            ]);
-            $posts = (new Mongo())->social_app->posts;
-            // $posts = Post::whereIn('privacy', array('Private', 'private'))->get();
+            ])->toArray();
+
             foreach ($posts as $post) {
-                $post = json_decode($post->user_id);
-
-                // DB::enableQueryLog();
-                $userSeen = DB::select('select * from friend_requests where ((sender_id = ? AND reciever_id = ?) OR (sender_id = ? AND reciever_id = ?)) AND status = ?', [$post, $decode->data, $decode->data, $post, 'Accept']);
-                // db.friend_requests.findOne({$and :[{$or:[{$and:[{sender_id:'619b2d6b65740000ec003dc2'}, {reciever_id:'619b718365740000ec003dc8'}]}, {$and:[{sender_id:'619b718365740000ec003dc8'}, {reciever_id:'619b2d6b65740000ec003dc2'}]}]}, {status:'Pending'}]})
-                // db.friend_requests.find({$and:[{$and:[{sender_id:?}, {reciever_id:?}]}, {status:?}]})
-
-                // $userSeen = FriendRequest::where('sender_id', '$post')
-                //     ->where('reciever_id', '$decode->data')
-                //     ->orWhere('sender_id', '$decode->data')
-                //     ->where('reciever_id', '$post')
-                //     ->where('status', '=', 'Accept')
-                //     // ->get()
-                //     ->toSql()
-                // ;
-                // dd(!empty($userSeen));
-                // dd(DB::getQueryLog());
-
-                if (!empty($userSeen) and json_decode($posts)) {
+                if ($post['user_id'] == $decode->data) {
                     return response([
                         'Posts' => $posts,
                     ]);
                 } else {
+                    $ownPost = false;
+                }
+            }
+
+            foreach ($posts as $post) {
+                $post = $post['user_id'];
+                $userSeen = $userCollection->findOne(
+                    [
+                        '$and' =>
+                        [
+                            [
+                                '$or' =>
+                                [
+                                    [
+                                        '$and' =>
+                                        [
+                                            ['FriendRequests.sender_id' => $decode->data], ['FriendRequests.reciever_id' => $post]
+                                        ]
+                                    ],
+                                    [
+                                        '$and' =>
+                                        [
+                                            ['FriendRequests.sender_id' => $post], ['FriendRequests.reciever_id' => $decode->data]
+                                        ]
+                                    ],
+                                ]
+                            ], ['FriendRequests.status' => 'Accept']
+                        ]
+                    ]
+                );
+
+                if (!empty($userSeen)) {
+                    return response([
+                        'Posts' => $posts,
+                    ]);
+                } else {
+                    return response([
+                        'message' => 'No Post Found',
+                    ]);
+                }
+
+                if ($ownPost == false) {
                     return response([
                         'message' => 'No Post Found',
                     ]);

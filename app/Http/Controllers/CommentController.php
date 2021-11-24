@@ -21,26 +21,28 @@ class CommentController extends Controller
             $currToken = $request->bearerToken();
             $decode = JWT::decode($currToken, new Key('socialApp_key', 'HS256'));
             $postsCollection = (new Mongo())->social_app->posts;
-            $commentCollection = (new Mongo())->social_app->comments;
+            $userCollection = (new Mongo())->social_app->users;
 
             $post_exists =  $postsCollection->findOne(
                 [
                     '_id' => new \MongoDB\BSON\ObjectId($request->post_id),
                 ]
             );
-            // $post_exists = POST::where('id', '=', $request->post_id)->first();
             if (!empty($post_exists)) {
                 if ($post_exists['privacy'] == 'Public' or $post_exists['privacy'] == 'public') {
                     $attachment = null;
                     if ($request->file('attachment') != null) {
                         $attachment = $request->file('attachment')->store('commentFiles');
                     }
-                    $comment = $commentCollection->insertOne([
-                        'user_id' => $decode->data,
-                        'post_id' => $request->post_id,
-                        'comments' => $request->comments,
-                        'attachment' => $attachment
-                    ]);
+                    $comment = $postsCollection->updateOne(
+                        ['_id' => new \MongoDB\BSON\ObjectId($request->post_id)],
+                        ['$push' => ['Comments' => [
+                            '_id' => substr(number_format(time() * rand(), 0, '', ''), 0, 6),
+                            'user_id' => $decode->data,
+                            'comments' => $request->comments,
+                            'attachment' => $attachment
+                        ]]]
+                    );
 
                     if (isset($comment)) {
                         return response([
@@ -52,34 +54,79 @@ class CommentController extends Controller
                         ]);
                     }
                 } elseif ($post_exists['privacy'] == 'Private' or $post_exists['privacy'] == 'private') {
-                    $userSeen = DB::select('select * from friend_requests where ((sender_id = ? AND reciever_id = ?) OR (sender_id = ? AND reciever_id = ?)) AND status = ?', [$post_exists->user_id, $decode->data, $decode->data, $post_exists->user_id, 'Accept']);
-                    if (!empty($userSeen)) {
+                    if ($decode->data == $post_exists['user_id']) {
                         $attachment = null;
                         if ($request->file('attachment') != null) {
                             $attachment = $request->file('attachment')->store('commentFiles');
                         }
-
-                        $comment = $commentCollection->insertOne([
-                            'user_id' => $decode->data,
-                            'post_id' => $request->post_id,
-                            'comments' => $request->comments,
-                            'attachment' => $attachment
-                        ]);
+                        $comment = $postsCollection->updateOne(
+                            ['_id' => new \MongoDB\BSON\ObjectId($request->post_id)],
+                            ['$push' => ['Comments' => [
+                                '_id' => substr(number_format(time() * rand(), 0, '', ''), 0, 6),
+                                'user_id' => $decode->data,
+                                'comments' => $request->comments,
+                                'attachment' => $attachment
+                            ]]]
+                        );
 
                         if (isset($comment)) {
                             return response([
                                 'message' => 'Comment Created Succesfully',
-                                'Comment' => $comment,
-                            ]);
-                        } else {
-                            return response([
-                                'message' => 'Something Went Wrong While added Comment',
                             ]);
                         }
                     } else {
-                        return response([
-                            'message' => 'This is Private Post. You are not authorize to Comment on this Post',
-                        ]);
+                        $userSeen = $userCollection->findOne(
+                            [
+                                '$and' =>
+                                [
+                                    [
+                                        '$or' =>
+                                        [
+                                            [
+                                                '$and' =>
+                                                [
+                                                    ['FriendRequests.sender_id' => $decode->data], ['FriendRequests.reciever_id' => $post_exists['user_id']]
+                                                ]
+                                            ],
+                                            [
+                                                '$and' =>
+                                                [
+                                                    ['FriendRequests.sender_id' => $post_exists['user_id']], ['FriendRequests.reciever_id' => $decode->data]
+                                                ]
+                                            ],
+                                        ]
+                                    ], ['FriendRequests.status' => 'Accept']
+                                ]
+                            ]
+                        );
+                        if (!empty($userSeen)) {
+                            $attachment = null;
+                            if ($request->file('attachment') != null) {
+                                $attachment = $request->file('attachment')->store('commentFiles');
+                            }
+                            $comment = $postsCollection->updateOne(
+                                ['_id' => new \MongoDB\BSON\ObjectId($request->post_id)],
+                                ['$push' => ['Comments' => [
+                                    '_id' => substr(number_format(time() * rand(), 0, '', ''), 0, 6),
+                                    'user_id' => $decode->data,
+                                    'comments' => $request->comments,
+                                    'attachment' => $attachment
+                                ]]]
+                            );
+                            if (isset($comment)) {
+                                return response([
+                                    'message' => 'Comment Created Succesfully',
+                                ]);
+                            } else {
+                                return response([
+                                    'message' => 'Something Went Wrong While added Comment',
+                                ]);
+                            }
+                        } else {
+                            return response([
+                                'message' => 'This is Private Post. You are not authorize to Comment on this Post',
+                            ]);
+                        }
                     }
                 }
             } else {
@@ -98,66 +145,90 @@ class CommentController extends Controller
             $currToken = $request->bearerToken();
             $decode = JWT::decode($currToken, new Key('socialApp_key', 'HS256'));
             $postsCollection = (new Mongo())->social_app->posts;
-            $commentCollection = (new Mongo())->social_app->comments;
+            $userCollection = (new Mongo())->social_app->users;
 
-            $comment_exists =  $commentCollection->findOne(
+            $comment_exists =  $postsCollection->findOne(
                 [
-                    '_id' => new \MongoDB\BSON\ObjectId($id),
+                    'Comments._id' => $id,
+                    'Comments.user_id' => $decode->data,
                 ]
             );
-
+            // dd($comment_exists['user_id']);
             if (!empty($comment_exists)) {
-                $post_privacy =  $postsCollection->findOne(
-                    [
-                        '_id' => new \MongoDB\BSON\ObjectId($comment_exists['post_id']),
-                    ]
-                );
-                $data_to_update = [];
-                foreach ($request->all() as $key => $value) {
-                    if (in_array($key, ['title', 'body', 'privacy', 'attachment'])) {
-                        $data_to_update[$key] = $value;
+                if ($comment_exists['privacy'] == 'Public' or $comment_exists['privacy'] == 'public') {
+                    if ($request->comments != null) {
+                        $postsCollection->updateOne(
+                            ['Comments._id' => $id],
+                            ['$set' => ['Comments.$.comments' => $request->comments]]
+                        );
                     }
-                }
-
-                if ($post_privacy['privacy'] == 'Public' or $post_privacy['privacy'] == 'public') {
-                    if ($request->file('attachment') != null and $comment_exists['attachment'] != null) {
-                        unlink(storage_path('app/' . $comment_exists['attachment']));
-                        $data_to_update['attachment'] = $request->file('attachment')->store('postFiles');
+                    if ($request->attachment != null) {
+                        $postsCollection->updateOne(
+                            ['Comments._id' => $id],
+                            ['$set' => ['Comments.$.attachment' => $request->file('attachment')->store('commentFiles')]]
+                        );
                     }
-                    $commentCollection->updateOne(
-                        ['_id' => new \MongoDB\BSON\ObjectId($id)],
-                        ['$set' => $data_to_update]
-                    );
                     return response([
                         'message' => 'Comment Updated Succesfully',
                     ]);
-                } elseif ($post_privacy['privacy'] == 'Private' or $post_privacy['privacy'] == 'private') {
-                    if ($decode->data == $post_privacy['user_id']) {
-                        if ($request->file('attachment') != null) {
-                            unlink(storage_path('app/' . $comment_exists['attachment']));
-                            $data_to_update['attachment'] = $request->file('attachment')->store('postFiles');
+                } elseif ($comment_exists['privacy'] == 'Private' or $comment_exists['privacy'] == 'private') {
+                    if ($decode->data == $comment_exists['user_id']) {
+                        if ($request->comments != null) {
+                            $postsCollection->updateOne(
+                                ['Comments._id' => $id],
+                                ['$set' => ['Comments.$.comments' => $request->comments]]
+                            );
                         }
-                        $commentCollection->updateOne(
-                            ['_id' => new \MongoDB\BSON\ObjectId($id)],
-                            ['$set' => $data_to_update]
-                        );
+                        if ($request->attachment != null) {
+                            $postsCollection->updateOne(
+                                ['Comments._id' => $id],
+                                ['$set' => ['Comments.$.attachment' => $request->file('attachment')->store('commentFiles')]]
+                            );
+                        }
                         return response([
                             'message' => 'Comment Updated Succesfully',
                         ]);
                     } else {
-                        $userSeen = DB::select('select * from friend_requests where ((sender_id = ? AND reciever_id = ?) OR (sender_id = ? AND reciever_id = ?)) AND status = ?', [$post_privacy->user_id, $decode->data, $decode->data, $post_privacy->user_id, 'Accept']);
+                        // $userSeen = DB::select('select * from friend_requests where ((sender_id = ? AND reciever_id = ?) OR (sender_id = ? AND reciever_id = ?)) AND status = ?', [$post_privacy->user_id, $decode->data, $decode->data, $post_privacy->user_id, 'Accept']);
+                        $userSeen = $userCollection->findOne(
+                            [
+                                '$and' =>
+                                [
+                                    [
+                                        '$or' =>
+                                        [
+                                            [
+                                                '$and' =>
+                                                [
+                                                    ['FriendRequests.sender_id' => $decode->data], ['FriendRequests.reciever_id' => $comment_exists['user_id']]
+                                                ]
+                                            ],
+                                            [
+                                                '$and' =>
+                                                [
+                                                    ['FriendRequests.sender_id' => $comment_exists['user_id']], ['FriendRequests.reciever_id' => $decode->data]
+                                                ]
+                                            ],
+                                        ]
+                                    ], ['FriendRequests.status' => 'Accept']
+                                ]
+                            ]
+                        );
                         if (!empty($userSeen)) {
-                            if ($request->file('attachment') != null) {
-                                unlink(storage_path('app/' . $comment_exists['attachment']));
-                                $data_to_update['attachment'] = $request->file('attachment')->store('postFiles');
+                            if ($request->comments != null) {
+                                $postsCollection->updateOne(
+                                    ['Comments._id' => $id],
+                                    ['$set' => ['Comments.$.comments' => $request->comments]]
+                                );
                             }
-                            $commentCollection->updateOne(
-                                ['_id' => new \MongoDB\BSON\ObjectId($id)],
-                                ['$set' => $data_to_update]
-                            );
+                            if ($request->attachment != null) {
+                                $postsCollection->updateOne(
+                                    ['Comments._id' => $id],
+                                    ['$set' => ['Comments.$.attachment' => $request->file('attachment')->store('commentFiles')]]
+                                );
+                            }
                             return response([
                                 'message' => 'Comment Updated Succesfully',
-                                'Updated Comment' => $comment_exists,
                             ]);
                         } else {
                             return response([
@@ -169,7 +240,7 @@ class CommentController extends Controller
                 }
             } else {
                 return response([
-                    'message' => 'No Post Found',
+                    'message' => 'No Comment Found',
                 ]);
             }
         } catch (Throwable $e) {
@@ -182,20 +253,24 @@ class CommentController extends Controller
         try {
             $currToken = $request->bearerToken();
             $decode = JWT::decode($currToken, new Key('socialApp_key', 'HS256'));
-            $commentCollection = (new Mongo())->social_app->comments;
+            $postCollection = (new Mongo())->social_app->posts;
 
-            $comment =  $commentCollection->findOne(
+            $comment =  $postCollection->findOne(
                 [
-                    '_id' => new \MongoDB\BSON\ObjectId($id),
-                    'user_id' => $decode->data,
+                    'Comments._id' => $id,
+                    'Comments.user_id' => $decode->data,
                 ]
             );
-            // $comment = Comment::where('id', '=', $id, 'AND', 'user_id', '=', $decode->data)->first();
             if (!empty($comment)) {
-                if ($comment->attachment != null) {
-                    unlink(storage_path('app/' . $comment['attachment']));
-                }
-                $commentCollection->deleteOne(['_id' => new \MongoDB\BSON\ObjectId($id)]);
+                $comment = $postCollection->updateOne(
+                    [
+                        'Comments._id' => $id,
+                        'Comments.user_id' => $decode->data,
+                    ],
+                    ['$pull' => ['Comments' => [
+                        '_id' => $id,
+                    ]]]
+                );
                 return response([
                     'message' => 'Comment has been Deleted',
                 ]);
